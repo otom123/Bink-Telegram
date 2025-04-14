@@ -85,6 +85,7 @@ export class ExampleToolExecutionCallback implements IToolExecutionCallback {
 
       console.log(`Progress: ${data.data.progress || 0}%`);
     }
+    data = typeof data === 'string' ? JSON.parse(data) : data;
 
     if (data.state === ToolExecutionState.COMPLETED && data.data) {
       if (
@@ -100,7 +101,10 @@ export class ExampleToolExecutionCallback implements IToolExecutionCallback {
           return scanUrls[network] || `${txHash}`;
         };
 
-        const scanUrl = getScanUrl(data.data.network, data.data.transactionHash);
+        const scanUrl = getScanUrl(
+          data.data.network || data.data.fromNetwork,
+          data.data.transactionHash,
+        );
         let message;
 
         if (data.toolName === 'swap') {
@@ -117,12 +121,13 @@ export class ExampleToolExecutionCallback implements IToolExecutionCallback {
         } else {
           // bridge
           message = `🎉 <b>Congratulations, your transaction has been successful.</b>
-- <b>Swapped:</b> ${formatSmartNumber(data.data.fromAmount)} ${data.data.fromToken?.symbol || ''} (${data.data.fromNetwork})
-- <b>Received:</b> ${formatSmartNumber(data.data.toAmount)} ${data.data.toToken?.symbol || ''} (${data.data.toNetwork})
-- <b>Transaction Hash:</b> <a href="${scanUrl}">View on ${data.data.network.charAt(0).toUpperCase() + data.data.network.slice(1)} Explorer</a>
+- <b>Bridged:</b> ${formatSmartNumber(data.data.amount)} ${data.data.fromToken?.symbol || ''} (${data.data.fromNetwork})
+- <b>Received:</b> ${formatSmartNumber(data.data.amount)} ${data.data.toToken?.symbol || ''} (${data.data.toNetwork})
+- <b>Transaction Hash:</b> <a href="${scanUrl}">View on ${data.data.fromNetwork.charAt(0).toUpperCase() + data.data.fromNetwork.slice(1)} Explorer</a>
 `;
         }
         this.onMessage(message);
+        console.log('message: ', message);
       }
 
       console.log(
