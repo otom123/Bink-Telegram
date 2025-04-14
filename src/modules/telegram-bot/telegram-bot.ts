@@ -83,7 +83,11 @@ export class TelegramBot implements OnApplicationBootstrap {
   }
 
   async deleteMessage(chatId: ChatId, messageId: string) {
-    return this.bot.deleteMessage(chatId, parseInt(messageId));
+    try {
+      return this.bot.deleteMessage(chatId, parseInt(messageId));
+    } catch (error) {
+      console.error("🚀 ~ TelegramBot ~ deleteMessage ~ error")
+    }
   }
 
   setupStartCommand(callback: any) {
@@ -281,7 +285,7 @@ export class TelegramBot implements OnApplicationBootstrap {
     try {
       return await this.bot.editMessageText(text, options);
     } catch (error) {
-      console.error('Error in TelegramBot.editMessageText:', error);
+      console.error('Error in TelegramBot.editMessageText:', error.message);
       return null;
     }
   }

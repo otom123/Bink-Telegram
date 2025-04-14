@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter } from 'events';
 import { JsonRpcProvider } from 'ethers';
-import { Agent, Wallet, Network, NetworkType, NetworksConfig, UUID } from '@binkai/core';
+import { Agent, Wallet, Network, NetworkType, NetworksConfig, UUID, PlanningAgent } from '@binkai/core';
 import { SwapPlugin } from '@binkai/swap-plugin';
 import { PancakeSwapProvider } from '@binkai/pancakeswap-provider';
 import { UserService } from './user.service';
@@ -27,7 +27,11 @@ import { VenusProvider } from '@binkai/venus-provider';
 import { ThenaProvider } from '@binkai/thena-provider';
 import { JupiterProvider } from '@binkai/jupiter-provider';
 import { Connection } from '@solana/web3.js';
-
+import ExampleAskUserCallback from '@/shared/tools/ask-user';
+import ExampleHumanReviewCallback from '@/shared/tools/human-review';
+import { EMessageType } from '@/shared/constants/enums';
+import { OkuProvider } from '@binkai/oku-provider';
+import { KyberProvider } from '@binkai/kyber-provider';
 @Injectable()
 export class AiService implements OnApplicationBootstrap {
   private openai: OpenAI;
@@ -42,6 +46,8 @@ export class AiService implements OnApplicationBootstrap {
   private bot: TelegramBot;
   mapAgent: Record<string, Agent> = {};
   mapToolExecutionCallback: Record<string, ExampleToolExecutionCallback> = {};
+  mapAskUserCallback: Record<string, ExampleAskUserCallback> = {};
+  mapHumanReviewCallback: Record<string, ExampleHumanReviewCallback> = {};
   @Inject('BSC_CONNECTION') private bscProvider: JsonRpcProvider;
   @Inject('ETHEREUM_CONNECTION') private ethProvider: JsonRpcProvider;
 
@@ -118,8 +124,6 @@ export class AiService implements OnApplicationBootstrap {
   async handleSwap(
     telegramId: string,
     input: string,
-    messageId: number,
-    onMessage?: (message: string) => void,
   ) {
     try {
       const keys = await this.userService.getMnemonicByTelegramId(telegramId);
@@ -139,27 +143,35 @@ export class AiService implements OnApplicationBootstrap {
         network,
       );
 
+      let messageThinkingId: number;
+      let messagePlanListId: number;
+      let isTransactionSuccess: boolean = false;
+
+      const messageThinking = await this.bot.sendMessage(telegramId, 'Thinking...', {
+        parse_mode: 'HTML',
+      });
+      messageThinkingId = messageThinking.message_id;
+
       let agent = this.mapAgent[telegramId];
 
       //init agent
       if (!agent) {
         const bscChainId = 56;
         const pancakeswap = new PancakeSwapProvider(this.bscProvider, bscChainId);
-
-        const okx = new OkxProvider(this.bscProvider, bscChainId);
-
+        // const okx = new OkxProvider(this.bscProvider, bscChainId);
         const fourMeme = new FourMemeProvider(this.bscProvider, bscChainId);
         const venus = new VenusProvider(this.bscProvider, bscChainId);
+        const oku = new OkuProvider(this.bscProvider, bscChainId);
+        const kyber = new KyberProvider(this.bscProvider, bscChainId);
         const jupiter = new JupiterProvider(new Connection(process.env.RPC_URL));
         const imagePlugin = new ImagePlugin();
         const swapPlugin = new SwapPlugin();
         const tokenPlugin = new TokenPlugin();
         const knowledgePlugin = new KnowledgePlugin();
         const bridgePlugin = new BridgePlugin();
-        const debridge = new deBridgeProvider(this.bscProvider);
+        const debridge = new deBridgeProvider([this.bscProvider, new Connection(process.env.RPC_URL)], 56, 7565164);
         const walletPlugin = new WalletPlugin();
         const stakingPlugin = new StakingPlugin();
-
         const thena = new ThenaProvider(this.bscProvider, bscChainId);
 
         // Initialize the swap plugin with supported chains and providers
@@ -167,7 +179,7 @@ export class AiService implements OnApplicationBootstrap {
           swapPlugin.initialize({
             defaultSlippage: 0.5,
             defaultChain: 'bnb',
-            providers: [pancakeswap, fourMeme, okx, thena, jupiter],
+            providers: [pancakeswap, fourMeme, thena, jupiter, oku, kyber],
             supportedChains: ['bnb', 'ethereum', 'solana'], // These will be intersected with agent's networks
           }),
           tokenPlugin.initialize({
@@ -190,7 +202,7 @@ export class AiService implements OnApplicationBootstrap {
           await walletPlugin.initialize({
             defaultChain: 'bnb',
             providers: [this.bnbProvider, this.birdeyeApi, this.alchemyApi],
-            supportedChains: ['bnb'],
+            supportedChains: ['bnb', 'solana', 'ethereum'],
           }),
           await stakingPlugin.initialize({
             defaultSlippage: 0.5,
@@ -200,10 +212,11 @@ export class AiService implements OnApplicationBootstrap {
           }),
         ]);
 
-        agent = new Agent(
+        agent = new PlanningAgent(
           {
             model: 'gpt-4o',
             temperature: 0,
+            isHumanReview: true,
             systemPrompt: `You are a BINK AI assistant. You can help user to query blockchain data .You are able to perform swaps and get token information on multiple chains. If you do not have the token address, you can use the symbol to get the token information before performing a swap.Additionally, you have the ability to get wallet balances across various networks. If the user doesn't specify a particular network, you can retrieve wallet balances from multiple chains like BNB, Solana, and Ethereum.
         Your respone format:
          BINK's tone is informative, bold, and subtly mocking, blending wit with a cool edge for the crypto crowd. Think chain-vaping degen energy, but refined—less "honey, sit down" and more "I've got this, you don't."
@@ -224,28 +237,103 @@ CRITICAL:
           this.networks,
         );
         await agent.initialize();
-        await agent.registerPlugin(swapPlugin);
-        await agent.registerPlugin(tokenPlugin);
-        await agent.registerDatabase(this.postgresAdapter);
-        await agent.registerPlugin(knowledgePlugin);
-        await agent.registerPlugin(bridgePlugin);
-        await agent.registerPlugin(walletPlugin);
-        await agent.registerPlugin(stakingPlugin);
-        await agent.registerPlugin(imagePlugin);
+        await agent.registerPlugin(swapPlugin as any);
+        await agent.registerPlugin(tokenPlugin as any);
+        await agent.registerDatabase(this.postgresAdapter as any);
+        await agent.registerPlugin(knowledgePlugin as any);
+        await agent.registerPlugin(bridgePlugin as any);
+        await agent.registerPlugin(walletPlugin as any);
+        await agent.registerPlugin(stakingPlugin as any);
+        await agent.registerPlugin(imagePlugin as any);
 
         const toolExecutionCallback = new ExampleToolExecutionCallback(
           telegramId,
           this.bot,
-          messageId,
-          onMessage,
+          messageThinkingId,
+          (type: string, message: string) => {
+            console.log("🚀 ~ AiService ~ tool execution ~ type:", type)
+            console.log("🚀 ~ AiService ~ tool execution ~ message:", message)
+            if (type === EMessageType.TOOL_EXECUTION) {
+              isTransactionSuccess = true;
+              this.bot.editMessageText(message, {
+                chat_id: telegramId,
+                message_id: messageThinkingId,
+                parse_mode: 'HTML',
+              });
+            }
+          }
         );
+
+        const askUserCallback = new ExampleAskUserCallback(
+          telegramId,
+          this.bot,
+          messageThinkingId,
+          (type: string, message: string) => {
+            console.log("🚀 ~ AiService ~ type ask user:", type)
+            console.log("🚀 ~ AiService ~ message ask user:", message)
+            // if (type === EMessageType.ASK_USER) {
+            //   isTransactionSuccess = true;
+            //   this.bot.editMessageText(message, {
+            //     chat_id: telegramId,
+            //     message_id: messageThinkingId,
+            //     parse_mode: 'HTML',
+            //   });
+            // }
+          }
+        );
+        const humanReviewCallback = new ExampleHumanReviewCallback(
+          telegramId,
+          this.bot,
+          messageThinkingId,
+          (type: string, message: string) => {
+            console.log("🚀 ~ AiService ~ human review ~ type:", type)
+            console.log("🚀 ~ AiService ~ human review ~ message:", message)
+
+            // if (type === EMessageType.HUMAN_REVIEW) {
+            //   isTransactionSuccess = true;
+            //   this.bot.editMessageText(message, {
+            //     chat_id: telegramId,
+            //     message_id: messageThinkingId,
+            //     parse_mode: 'HTML',
+            //   });
+            // }
+          }
+        );
+
         this.mapToolExecutionCallback[telegramId] = toolExecutionCallback;
+        this.mapAskUserCallback[telegramId] = askUserCallback;
+        this.mapHumanReviewCallback[telegramId] = humanReviewCallback;
+
+
         agent.registerToolExecutionCallback(toolExecutionCallback as any);
+        agent.registerAskUserCallback(askUserCallback as any);
+        agent.registerHumanReviewCallback(humanReviewCallback as any);
+
         this.mapAgent[telegramId] = agent;
+      } else {
+
+        this.mapToolExecutionCallback[telegramId].setMessageId(messageThinkingId);
+        this.mapToolExecutionCallback[telegramId].setMessagePlanListId(messagePlanListId);
+        this.mapAskUserCallback[telegramId].setMessageId(messageThinkingId);
+        this.mapHumanReviewCallback[telegramId].setMessageId(messageThinkingId);
+        this.mapToolExecutionCallback[telegramId].setMessageData(
+          (type: string, message: string) => {
+            console.log("🚀 ~ AiService ~ tool execution ~ type:", type)
+            console.log("🚀 ~ AiService ~ tool execution ~ message:", message)
+            if (type === EMessageType.TOOL_EXECUTION) {
+              isTransactionSuccess = true;
+              try {
+                this.bot.sendMessage(telegramId, message, {
+                  parse_mode: 'HTML',
+                });
+              } catch (error) {
+                console.error("🚀 ~ AiService ~ edit message text ~ error", error.message)
+              }
+            }
+          }
+        );
       }
 
-      this.mapToolExecutionCallback[telegramId].setMessageId(messageId);
-      this.mapToolExecutionCallback[telegramId].setOnMessage(onMessage);
 
       const inputResult = await agent.execute({
         input: `
@@ -254,16 +342,30 @@ CRITICAL:
         threadId: user.current_thread_id as UUID,
       });
 
-      const result = inputResult.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') || 'test';
-
-      // If callback is provided, use it to handle the message
-      if (onMessage) {
-        onMessage(result);
+      let result;
+      if (inputResult && inputResult.length > 0) {
+        result = inputResult.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') || 'Please try again';
       }
-      // return result;
+
+      console.log("🚀 ~ AiService End ~ result:", result)
+
+      // TODO: handle result
+      if (result && !isTransactionSuccess) {
+
+        // TODO: Edit message in chat
+        try {
+          await this.bot.editMessageText(result, {
+            chat_id: telegramId,
+            message_id: messageThinkingId,
+            parse_mode: 'HTML',
+          });
+        } catch (error) {
+          console.error("🚀 ~ AiService ~ edit message text ~ error", error.message)
+        }
+      }
     } catch (error) {
-      console.error('Error in handleSwap:', error);
-      return 'test';
+      console.error('Error in handleSwap:', error.message);
+      return 'Please try again';
     }
   }
 
@@ -335,7 +437,7 @@ CRITICAL:
   }
 
   // Helper method to consume stream with async iterator
-  async *generateStreamResponse(
+  async * generateStreamResponse(
     messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
     options: {
       model?: string;

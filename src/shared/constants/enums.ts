@@ -22,3 +22,10 @@ export enum EClusterStatus {
   RUNNING = 'RUNNING',
   DISABLE = 'DISABLE',
 }
+
+export enum EMessageType {
+  TOOL_EXECUTION = 'tool-execution',
+  ASK_USER = 'ask-user',
+  HUMAN_REVIEW = 'human-review',
+  OTHER = 'other',
+}

@@ -56,18 +56,13 @@ export class UserInputHandler implements Handler {
     reply_to_message_id?: number;
     photo?: string;
   }) => {
-    let messageErrorId = null;
     try {
       const text = data?.text?.replace('/', '');
       //skip if COMMAND_KEYS includes data.text
       if (Object.keys(COMMAND_KEYS).includes(text?.toUpperCase() as any)) {
         return;
       }
-      const firstMessage = 'Thinking...';
-      const messageId = await this.bot.sendMessage(data.chatId, firstMessage, {
-        parse_mode: 'HTML',
-      });
-      messageErrorId = messageId.message_id;
+
       const captionText = data.caption || '';
       let imageUrl = null;
       if (data.photo) {
@@ -79,31 +74,21 @@ export class UserInputHandler implements Handler {
 
       console.log("🚀 ~ UserInputHandler ~ imageUrl:", imageUrl)
 
-      let isReceivedMessage = false;
-
       // handle swap
       await this.aiService.handleSwap(
         data.telegramId,
         imageUrl
           ? `${text}${captionText ? ` ${captionText}` : ''} [Image: ${imageUrl}]`
           : data.text,
-        messageId.message_id,
-        async (message: string) => {
-          if (!isReceivedMessage) {
-            isReceivedMessage = true;
-            await this.bot.editMessageText(message, {
-              chat_id: data.chatId,
-              message_id: messageId.message_id,
-              parse_mode: 'HTML',
-            });
-          }
-        }
       );
     } catch (error) {
       console.error('Error in UserInputHandler:', error);
-      await this.bot.editMessageText('Something went wrong. Please try again', {
-        chat_id: data.chatId,
-        message_id: messageErrorId,
+      // await this.bot.editMessageText('Something went wrong. Please try again', {
+      //   chat_id: data.chatId,
+      //   message_id: messageErrorId,
+      //   parse_mode: 'HTML',
+      // });
+      await this.bot.sendMessage(data.chatId, 'Something went wrong. Please try again', {
         parse_mode: 'HTML',
       });
     }
